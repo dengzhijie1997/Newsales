@@ -1,15 +1,70 @@
 // 全局变量
 let salesData = []; // 保存所有销售数据
 let unsubscribe = null; // Firebase实时监听取消函数
+let isAppInitialized = false; // 应用初始化状态
+let syncRetryCount = 0; // 同步重试计数
+const MAX_SYNC_RETRIES = 3; // 最大重试次数
+
+// 检查 Firebase 功能是否可用
+function checkFirebaseFunctions() {
+    if (!window.firebaseInitialized) {
+        throw new Error('Firebase 未初始化');
+    }
+    
+    const requiredFunctions = [
+        'addSalesRecord',
+        'updateSalesRecord',
+        'deleteSalesRecord',
+        'setupRealtimeListener'
+    ];
+    
+    for (const funcName of requiredFunctions) {
+        if (typeof window[funcName] !== 'function') {
+            throw new Error(`Firebase 功能未就绪: ${funcName}`);
+        }
+    }
+}
 
 // DOM元素加载完成后执行
 document.addEventListener('DOMContentLoaded', () => {
-    // 初始化应用
-    initApp();
+    // 等待 Firebase 初始化完成后再初始化应用
+    waitForFirebase();
 });
+
+// 等待 Firebase 初始化
+async function waitForFirebase() {
+    console.log('等待 Firebase 初始化...');
+    try {
+        // 等待 Firebase 初始化完成
+        let retryCount = 0;
+        while (!window.firebaseInitialized && retryCount < 20) {
+            await new Promise(resolve => setTimeout(resolve, 500));
+            retryCount++;
+            console.log(`等待 Firebase 初始化... 尝试 ${retryCount}/20`);
+        }
+
+        if (!window.firebaseInitialized) {
+            throw new Error('Firebase 初始化超时');
+        }
+
+        // 检查 Firebase 功能
+        checkFirebaseFunctions();
+
+        // Firebase 已初始化，开始初始化应用
+        await initApp();
+    } catch (error) {
+        console.error('等待 Firebase 初始化失败:', error);
+        showNotification('应用启动失败: ' + error.message, 'error');
+    }
+}
 
 // 初始化应用
 async function initApp() {
+    if (isAppInitialized) {
+        console.log('应用已经初始化');
+        return;
+    }
+
     console.log('正在初始化应用...');
     try {
         // 设置当前日期
@@ -24,16 +79,21 @@ async function initApp() {
         // 导出显示通知函数给Firebase模块使用
         window.appShowNotification = showNotification;
         
-        // 初始化Firebase并设置数据同步
-        await initializeFirebase();
+        // 设置自动重连
+        setupAutoReconnect();
         
         // 设置实时数据同步
         await setupDataSync();
+        
+        // 标记应用已初始化
+        isAppInitialized = true;
         
         // 隐藏加载屏幕
         setTimeout(() => {
             document.getElementById('loading-screen').style.display = 'none';
         }, 1000);
+
+        console.log('应用初始化成功');
     } catch (error) {
         console.error('应用初始化失败:', error);
         showNotification('应用初始化失败: ' + error.message, 'error');
@@ -90,6 +150,12 @@ async function handleFormSubmit(e) {
     e.preventDefault();
     
     try {
+        // 检查应用和 Firebase 状态
+        if (!isAppInitialized) {
+            throw new Error('应用未完成初始化');
+        }
+        checkFirebaseFunctions();
+        
         // 获取表单数据
         const dateInput = document.getElementById('date').value;
         const salesInput = parseFloat(document.getElementById('sales').value);
@@ -122,14 +188,19 @@ async function handleFormSubmit(e) {
                 '数据已存在',
                 `${dateInput} 的数据已存在，是否覆盖？`,
                 async () => {
-                    // 更新数据
-                    await updateSalesRecord(salesData[existingDataIndex].id, formData);
-                    resetForm();
+                    try {
+                        // 更新数据
+                        await window.updateSalesRecord(salesData[existingDataIndex].id, formData);
+                        resetForm();
+                    } catch (error) {
+                        console.error('更新数据失败:', error);
+                        showNotification('更新数据失败: ' + error.message, 'error');
+                    }
                 }
             );
         } else {
             // 添加新数据
-            await addSalesRecord(formData);
+            await window.addSalesRecord(formData);
             resetForm();
         }
     } catch (error) {
@@ -152,22 +223,21 @@ async function setupDataSync() {
     try {
         console.log('设置数据同步...');
         
-        // 确保 Firebase 已初始化
-        if (!window.firebase) {
-            throw new Error('Firebase 未初始化');
-        }
+        // 检查 Firebase 功能
+        checkFirebaseFunctions();
         
         // 取消之前的监听（如果有）
         if (unsubscribe) {
             unsubscribe();
             unsubscribe = null;
         }
-        
-        // 从 firebase-config.js 获取实时数据监听函数
-        unsubscribe = setupRealtimeListener(data => {
+
+        unsubscribe = window.setupRealtimeListener(data => {
             console.log('收到数据更新，共' + data.length + '条记录');
             salesData = data;
             updateUI();
+            // 重置重试计数
+            syncRetryCount = 0;
         });
         
         if (!unsubscribe) {
@@ -179,9 +249,42 @@ async function setupDataSync() {
         
     } catch (error) {
         console.error('设置数据同步失败:', error);
+        
+        // 如果还有重试机会，则重试
+        if (syncRetryCount < MAX_SYNC_RETRIES) {
+            syncRetryCount++;
+            console.log(`数据同步失败，${syncRetryCount}秒后重试... (${syncRetryCount}/${MAX_SYNC_RETRIES})`);
+            showNotification(`数据同步失败，正在重试 (${syncRetryCount}/${MAX_SYNC_RETRIES})`, 'warning');
+            
+            // 延迟重试
+            await new Promise(resolve => setTimeout(resolve, syncRetryCount * 1000));
+            return setupDataSync();
+        }
+        
         showNotification('数据同步失败: ' + error.message, 'error');
         throw error; // 向上传播错误
     }
+}
+
+// 添加自动重连机制
+function setupAutoReconnect() {
+    // 监听在线状态
+    window.addEventListener('online', async () => {
+        console.log('网络已恢复，尝试重新连接...');
+        showNotification('网络已恢复，正在重新连接...', 'info');
+        try {
+            syncRetryCount = 0; // 重置重试计数
+            await setupDataSync();
+        } catch (error) {
+            console.error('重新连接失败:', error);
+        }
+    });
+
+    // 监听离线状态
+    window.addEventListener('offline', () => {
+        console.log('网络已断开');
+        showNotification('网络已断开，等待重新连接...', 'warning');
+    });
 }
 
 // 更新UI
@@ -359,7 +462,8 @@ function handleDelete(e) {
         `确定要删除 ${formattedDate} 的数据吗？此操作不可恢复。`,
         async () => {
             try {
-                await deleteSalesRecord(id);
+                checkFirebaseFunctions(); // 检查 Firebase 功能
+                await window.deleteSalesRecord(id);
             } catch (error) {
                 console.error('删除数据失败:', error);
                 showNotification('删除数据失败: ' + error.message, 'error');

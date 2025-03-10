@@ -6,7 +6,6 @@
     <title>销售数据管理系统</title>
     <link rel="stylesheet" href="styles.css">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
-    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     
     <!-- Firebase SDK -->
     <script type="module">
@@ -59,22 +58,93 @@
             CACHE_SIZE_UNLIMITED
         };
 
-        // 确保 Firebase 模块加载完成后再加载配置
-        window.addEventListener('DOMContentLoaded', () => {
-            const configScript = document.createElement('script');
-            configScript.src = 'firebase-config.js';
-            configScript.onload = () => {
-                const appScript = document.createElement('script');
-                appScript.src = 'app.js';
-                document.head.appendChild(appScript);
-            };
-            document.head.appendChild(configScript);
+        // 初始化状态标志
+        window.firebaseInitialized = false;
+
+        // 等待 DOM 加载完成
+        document.addEventListener('DOMContentLoaded', async () => {
+            try {
+                console.log('开始加载应用...');
+                
+                // 显示加载提示
+                const loadingScreen = document.getElementById('loading-screen');
+                if (loadingScreen) {
+                    loadingScreen.style.display = 'flex';
+                }
+
+                // 先加载 firebase-config.js
+                console.log('加载 Firebase 配置...');
+                await new Promise((resolve, reject) => {
+                    const configScript = document.createElement('script');
+                    configScript.src = 'firebase-config.js';
+                    configScript.onload = () => {
+                        console.log('Firebase 配置加载完成');
+                        resolve();
+                    };
+                    configScript.onerror = (error) => {
+                        console.error('Firebase 配置加载失败:', error);
+                        reject(error);
+                    };
+                    document.head.appendChild(configScript);
+                });
+
+                // 等待 Firebase 配置加载完成
+                console.log('等待 Firebase 配置初始化...');
+                await new Promise((resolve) => {
+                    const checkInit = () => {
+                        if (window.initializeFirebase) {
+                            console.log('Firebase 配置已就绪');
+                            resolve();
+                        } else {
+                            setTimeout(checkInit, 100);
+                        }
+                    };
+                    checkInit();
+                });
+
+                // 初始化 Firebase
+                console.log('开始初始化 Firebase...');
+                await window.initializeFirebase();
+                window.firebaseInitialized = true;
+                console.log('Firebase 初始化成功');
+
+                // 最后加载 app.js
+                console.log('加载应用脚本...');
+                await new Promise((resolve, reject) => {
+                    const appScript = document.createElement('script');
+                    appScript.src = 'app.js';
+                    appScript.onload = () => {
+                        console.log('应用脚本加载完成');
+                        resolve();
+                    };
+                    appScript.onerror = (error) => {
+                        console.error('应用脚本加载失败:', error);
+                        reject(error);
+                    };
+                    document.head.appendChild(appScript);
+                });
+
+                // 隐藏加载提示
+                if (loadingScreen) {
+                    loadingScreen.style.display = 'none';
+                }
+                
+                console.log('应用加载完成');
+            } catch (error) {
+                console.error('应用加载失败:', error);
+                alert('应用加载失败: ' + error.message + '\n请刷新页面重试');
+                
+                // 隐藏加载提示
+                if (loadingScreen) {
+                    loadingScreen.style.display = 'none';
+                }
+            }
         });
     </script>
 </head>
 <body>
     <!-- 加载提示 -->
-    <div id="loading-screen">
+    <div id="loading-screen" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(255,255,255,0.9); z-index: 9999; justify-content: center; align-items: center;">
         <div class="loading-content">
             <i class="fas fa-sync fa-spin"></i>
             <p>数据加载中...</p>
