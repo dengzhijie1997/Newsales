@@ -1,0 +1,211 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>销售数据管理系统</title>
+    <link rel="stylesheet" href="styles.css">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <!-- Firebase SDK -->
+    <script type="module">
+        // 导入 Firebase 核心功能
+        import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.8.0/firebase-app.js';
+        
+        // 导入 Firestore 相关功能
+        import { 
+            getFirestore,
+            collection,
+            query,
+            where,
+            orderBy,
+            onSnapshot,
+            addDoc,
+            deleteDoc,
+            updateDoc,
+            doc,
+            getDocs,
+            limit,
+            serverTimestamp,
+            enableIndexedDbPersistence,
+            CACHE_SIZE_UNLIMITED
+        } from 'https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore.js';
+
+        // 导入 Firebase Analytics（可选）
+        import { getAnalytics } from 'https://www.gstatic.com/firebasejs/10.8.0/firebase-analytics.js';
+        
+        // 将所有 Firebase 模块暴露给全局作用域
+        window.firebaseModules = {
+            // 核心功能
+            initializeApp,
+            getAnalytics,
+            
+            // Firestore 功能
+            getFirestore,
+            collection,
+            query,
+            where,
+            orderBy,
+            onSnapshot,
+            addDoc,
+            deleteDoc,
+            updateDoc,
+            doc,
+            getDocs,
+            limit,
+            serverTimestamp,
+            enableIndexedDbPersistence,
+            CACHE_SIZE_UNLIMITED
+        };
+    </script>
+    <!-- 确保Firebase配置最后加载 -->
+    <script defer src="firebase-config.js"></script>
+    <script defer src="app.js"></script>
+</head>
+<body>
+    <!-- 加载提示 -->
+    <div id="loading-screen">
+        <div class="loading-content">
+            <i class="fas fa-sync fa-spin"></i>
+            <p>数据加载中...</p>
+        </div>
+    </div>
+
+    <div class="app-container">
+        <!-- 顶部导航 -->
+        <header class="app-header">
+            <h1><i class="fas fa-chart-line"></i> 销售数据管理</h1>
+        </header>
+
+        <!-- 主内容区域 -->
+        <main class="main-content">
+            <!-- 数据摘要卡片 -->
+            <section class="summary-section">
+                <div class="card">
+                    <div class="card-header">
+                        <h2>月度总览</h2>
+                    </div>
+                    <div class="card-body">
+                        <div class="stats-container">
+                            <div class="stat-item">
+                                <div class="stat-title">本月销售额</div>
+                                <div class="stat-value" id="monthly-sales">¥0</div>
+                            </div>
+                            <div class="stat-item">
+                                <div class="stat-title">微信添加量</div>
+                                <div class="stat-value" id="monthly-wechat">0人</div>
+                            </div>
+                            <div class="stat-item">
+                                <div class="stat-title">样品发出量</div>
+                                <div class="stat-value" id="monthly-samples">0份</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="card">
+                    <div class="card-header">
+                        <h2>近三天数据</h2>
+                    </div>
+                    <div class="card-body">
+                        <div class="recent-data" id="recent-data">
+                            <!-- 近三天数据将由JS动态生成 -->
+                            <div class="loading-indicator">加载数据中...</div>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- 数据录入表单 -->
+            <section class="data-form-section">
+                <div class="card">
+                    <div class="card-header">
+                        <h2>每日数据录入</h2>
+                    </div>
+                    <div class="card-body">
+                        <form id="sales-form">
+                            <div class="form-group">
+                                <label for="date">日期</label>
+                                <input type="date" id="date" required>
+                            </div>
+                            <div class="form-group">
+                                <label for="sales">销售额 (元)</label>
+                                <input type="number" id="sales" required min="0" step="0.01">
+                            </div>
+                            <div class="form-group">
+                                <label for="wechat">微信添加量 (人)</label>
+                                <input type="number" id="wechat" required min="0">
+                            </div>
+                            <div class="form-group">
+                                <label for="samples">样品发出量 (份)</label>
+                                <input type="number" id="samples" required min="0">
+                            </div>
+                            <div class="form-group">
+                                <label for="notes">备注</label>
+                                <textarea id="notes"></textarea>
+                            </div>
+                            <div class="form-actions">
+                                <button type="submit" class="btn btn-primary">保存数据</button>
+                                <button type="button" id="reset-form" class="btn btn-secondary">重置</button>
+                            </div>
+                        </form>
+                    </div>
+                </div>
+            </section>
+
+            <!-- 数据列表 -->
+            <section class="data-list-section">
+                <div class="card">
+                    <div class="card-header">
+                        <h2>销售记录</h2>
+                        <div class="card-actions">
+                            <button id="export-data" class="btn btn-secondary">
+                                <i class="fas fa-file-export"></i> 导出数据
+                            </button>
+                        </div>
+                    </div>
+                    <div class="card-body">
+                        <div class="table-container">
+                            <table id="data-table">
+                                <thead>
+                                    <tr>
+                                        <th>日期</th>
+                                        <th>销售额 (元)</th>
+                                        <th>微信添加量</th>
+                                        <th>样品发出量</th>
+                                        <th>备注</th>
+                                        <th>操作</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="data-table-body">
+                                    <!-- 数据将由JS动态生成 -->
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+            </section>
+        </main>
+    </div>
+
+    <!-- 通知提示 -->
+    <div id="notification" class="notification"></div>
+
+    <!-- 确认对话框 -->
+    <div id="confirm-dialog" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3 id="confirm-title">确认操作</h3>
+                <button id="close-confirm" class="close-btn">&times;</button>
+            </div>
+            <div class="modal-body">
+                <p id="confirm-message">确定要执行此操作吗？</p>
+            </div>
+            <div class="modal-footer">
+                <button id="confirm-yes" class="btn btn-danger">确定</button>
+                <button id="confirm-no" class="btn btn-secondary">取消</button>
+            </div>
+        </div>
+    </div>
+</body>
+</html> 
