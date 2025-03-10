@@ -7,6 +7,7 @@
     <link rel="stylesheet" href="styles.css">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    
     <!-- Firebase SDK -->
     <script type="module">
         // 导入 Firebase 核心功能
@@ -57,10 +58,19 @@
             enableIndexedDbPersistence,
             CACHE_SIZE_UNLIMITED
         };
+
+        // 确保 Firebase 模块加载完成后再加载配置
+        window.addEventListener('DOMContentLoaded', () => {
+            const configScript = document.createElement('script');
+            configScript.src = 'firebase-config.js';
+            configScript.onload = () => {
+                const appScript = document.createElement('script');
+                appScript.src = 'app.js';
+                document.head.appendChild(appScript);
+            };
+            document.head.appendChild(configScript);
+        });
     </script>
-    <!-- 确保Firebase配置最后加载 -->
-    <script defer src="firebase-config.js"></script>
-    <script defer src="app.js"></script>
 </head>
 <body>
     <!-- 加载提示 -->

@@ -11,12 +11,21 @@ const firebaseConfig = {
 
 // 全局变量
 let app = null;
-let analytics = null;
 let db = null;
 let salesCollection = null;
 let isInitialized = false;
 let initializeRetryCount = 0;
 const MAX_RETRY_ATTEMPTS = 3;
+
+// 检查网络连接
+async function checkConnection() {
+  try {
+    const response = await fetch('https://www.googleapis.com/');
+    return response.ok;
+  } catch (error) {
+    return false;
+  }
+}
 
 // 初始化 Firebase
 async function initializeFirebase() {
@@ -30,44 +39,35 @@ async function initializeFirebase() {
   }
 
   try {
+    // 检查网络连接
+    const isOnline = await checkConnection();
+    if (!isOnline) {
+      throw new Error('无法连接到网络，请检查网络连接');
+    }
+
     console.log(`开始初始化 Firebase... (尝试 ${initializeRetryCount + 1}/${MAX_RETRY_ATTEMPTS})`);
     
-    // 检查 Firebase 模块是否已加载
+    // 等待确保 Firebase 模块已加载
+    let retryCount = 0;
+    while (!window.firebaseModules && retryCount < 10) {
+      await new Promise(resolve => setTimeout(resolve, 500));
+      retryCount++;
+    }
+    
     const modules = window.firebaseModules;
     if (!modules) {
-      throw new Error('Firebase 模块未加载，请检查网络连接');
+      throw new Error('Firebase SDK 未加载，请检查网络连接');
     }
     
     // 初始化 Firebase 应用
     if (!app) {
       app = modules.initializeApp(firebaseConfig);
       console.log('Firebase 应用初始化成功');
-      
-      // 初始化 Analytics（可选）
-      try {
-        analytics = modules.getAnalytics(app);
-        console.log('Firebase Analytics 初始化成功');
-      } catch (analyticsError) {
-        console.warn('Analytics 初始化失败（非关键错误）:', analyticsError);
-      }
     }
     
     // 初始化 Firestore
     if (!db) {
       db = modules.getFirestore(app);
-      
-      // 启用离线持久化
-      try {
-        await modules.enableIndexedDbPersistence(db);
-        console.log('离线持久化已启用');
-      } catch (persistenceError) {
-        if (persistenceError.code === 'failed-precondition') {
-          console.warn('多个标签页打开，离线持久化仅能在一个标签页中启用');
-        } else if (persistenceError.code === 'unimplemented') {
-          console.warn('当前浏览器不支持离线持久化');
-        }
-      }
-      
       console.log('Firestore 初始化成功');
     }
     
@@ -81,15 +81,14 @@ async function initializeFirebase() {
     try {
       const testQuery = modules.query(salesCollection, modules.limit(1));
       const testSnapshot = await modules.getDocs(testQuery);
-      console.log('集合访问测试成功，当前记录数:', testSnapshot.size);
+      console.log('Firebase 连接测试成功，当前记录数:', testSnapshot.size);
     } catch (testError) {
-      console.error('集合访问测试失败:', testError);
+      console.error('Firebase 连接测试失败:', testError);
       if (testError.code === 'permission-denied') {
-        showNotification('Firebase 权限错误：请检查 Firestore 安全规则', 'error');
+        throw new Error('Firebase 权限错误：请检查 Firestore 安全规则');
       } else {
-        showNotification('数据库连接测试失败：' + testError.message, 'error');
+        throw new Error('数据库连接失败：' + testError.message);
       }
-      throw testError;
     }
     
     isInitialized = true;
@@ -117,8 +116,7 @@ async function initializeFirebase() {
 // 设置实时数据监听
 function setupRealtimeListener(callback) {
   if (!isInitialized || !db || !salesCollection) {
-    console.error('Firebase 未初始化');
-    return null;
+    throw new Error('Firebase 未初始化，请刷新页面重试');
   }
 
   try {
@@ -143,12 +141,13 @@ function setupRealtimeListener(callback) {
       },
       error => {
         console.error('实时数据监听错误:', error);
-        showNotification('数据同步失败: ' + error.message, 'error');
-        
-        // 如果是权限错误，提供更详细的提示
         if (error.code === 'permission-denied') {
           showNotification('没有访问权限，请检查 Firestore 安全规则', 'error');
+        } else {
+          showNotification('数据同步失败: ' + error.message, 'error');
         }
+        // 尝试重新连接
+        setTimeout(() => initializeFirebase(), 3000);
       }
     );
   } catch (error) {
@@ -160,11 +159,11 @@ function setupRealtimeListener(callback) {
 
 // 获取所有销售数据
 async function fetchSalesData() {
+  if (!isInitialized || !db || !salesCollection) {
+    throw new Error('Firebase 未初始化，请刷新页面重试');
+  }
+
   try {
-    if (!isInitialized || !db || !salesCollection) {
-      throw new Error('Firebase未初始化');
-    }
-    
     const modules = window.firebaseModules;
     const q = modules.query(
       salesCollection,
@@ -185,11 +184,11 @@ async function fetchSalesData() {
 
 // 添加销售记录
 async function addSalesRecord(record) {
+  if (!isInitialized || !db || !salesCollection) {
+    throw new Error('Firebase 未初始化，请刷新页面重试');
+  }
+
   try {
-    if (!isInitialized || !db || !salesCollection) {
-      throw new Error('Firebase未初始化');
-    }
-    
     const modules = window.firebaseModules;
     
     // 添加服务器时间戳
@@ -211,11 +210,11 @@ async function addSalesRecord(record) {
 
 // 更新销售记录
 async function updateSalesRecord(id, updatedRecord) {
+  if (!isInitialized || !db || !salesCollection) {
+    throw new Error('Firebase 未初始化，请刷新页面重试');
+  }
+
   try {
-    if (!isInitialized || !db || !salesCollection) {
-      throw new Error('Firebase未初始化');
-    }
-    
     const modules = window.firebaseModules;
     
     // 添加更新时间戳
@@ -237,11 +236,11 @@ async function updateSalesRecord(id, updatedRecord) {
 
 // 删除销售记录
 async function deleteSalesRecord(id) {
+  if (!isInitialized || !db || !salesCollection) {
+    throw new Error('Firebase 未初始化，请刷新页面重试');
+  }
+
   try {
-    if (!isInitialized || !db || !salesCollection) {
-      throw new Error('Firebase未初始化');
-    }
-    
     const modules = window.firebaseModules;
     const docRef = modules.doc(db, 'salesData', id);
     await modules.deleteDoc(docRef);
@@ -268,17 +267,26 @@ function showNotification(message, type = 'info') {
   }
 }
 
-// 初始化应用
+// 确保在页面加载完成后初始化
 window.addEventListener('load', async () => {
-  console.log('页面加载完成，开始初始化 Firebase...');
+  console.log('页面加载完成，等待 Firebase 模块...');
   try {
+    // 等待 Firebase 模块加载
+    let retryCount = 0;
+    while (!window.firebaseModules && retryCount < 20) {
+      await new Promise(resolve => setTimeout(resolve, 500));
+      retryCount++;
+    }
+    
+    if (!window.firebaseModules) {
+      throw new Error('Firebase SDK 加载超时，请检查网络连接');
+    }
+    
     await initializeFirebase();
     console.log('Firebase 初始化成功');
   } catch (error) {
     console.error('Firebase 初始化失败:', error);
-    if (typeof window.appShowNotification === 'function') {
-      window.appShowNotification('初始化失败: ' + error.message, 'error');
-    }
+    showNotification('初始化失败: ' + error.message, 'error');
   }
 });
 
